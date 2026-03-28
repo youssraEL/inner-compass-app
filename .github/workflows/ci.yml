@@ -1,0 +1,180 @@
+# ============================================================
+# CI — Inner Compass
+# Runs on every push to any branch and every PR to main.
+#
+# Required secrets: none (pure lint/type/test checks)
+# Optional secrets: none
+#
+# Branch strategy:
+#   main       → production  (protected: CI must pass + 1 review)
+#   develop    → staging     (CI only)
+#   feature/*  → CI + preview build on PR
+#
+# To enforce branch protection on main, go to:
+#   GitHub → Settings → Branches → Add rule → Branch name: main
+#     ✓ Require status checks to pass before merging
+#         Add: ci / typecheck, ci / lint, ci / test
+#     ✓ Require at least 1 approving review
+#     ✓ Do not allow bypassing the above settings
+# ============================================================
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: ESLint
+        run: npx eslint . --ext .ts,.tsx --max-warnings 0
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Run tests
+        run: npm test -- --passWithNoTests
+
+  expo-config:
+    name: Expo Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Validate Expo config
+        run: npx expo-env-info
+
+  # Post a PR comment summarising what failed (only on PRs)
+  notify-failure:
+    name: Notify PR on failure
+    runs-on: ubuntu-latest
+    needs: [typecheck, lint, test, expo-config]
+    if: |
+      failure() &&
+      github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post failure comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = [
+              { name: 'TypeScript',   result: '${{ needs.typecheck.result }}' },
+              { name: 'ESLint',       result: '${{ needs.lint.result }}' },
+              { name: 'Tests',        result: '${{ needs.test.result }}' },
+              { name: 'Expo Config',  result: '${{ needs.expo-config.result }}' },
+            ];
+            const failed = jobs
+              .filter(j => j.result === 'failure')
+              .map(j => `- ❌ **${j.name}**`)
+              .join('\n');
+            const body = [
+              '## CI failed on this PR',
+              '',
+              'The following checks did not pass:',
+              failed,
+              '',
+              `> Run: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

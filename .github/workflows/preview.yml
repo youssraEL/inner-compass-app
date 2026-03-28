@@ -1,0 +1,139 @@
+# ============================================================
+# Preview — Inner Compass
+# Creates an EAS Update preview build for every PR to main.
+# Posts a QR code link as a PR comment so reviewers can test
+# on a real device instantly via Expo Go.
+#
+# Required secrets (GitHub → Settings → Secrets → Actions):
+#   EXPO_TOKEN  → expo.dev/accounts/[username]/settings/access-tokens
+#
+# How to get EXPO_TOKEN:
+#   1. Go to https://expo.dev/accounts/[your-username]/settings/access-tokens
+#   2. Click "Create Token" → name it "GitHub Actions"
+#   3. Copy the token → paste into GitHub secret EXPO_TOKEN
+# ============================================================
+
+name: Preview
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  eas-update-preview:
+    name: EAS Update — PR preview
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Login to Expo
+        run: eas login --token ${{ secrets.EXPO_TOKEN }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish EAS Update (PR preview branch)
+        id: eas-update
+        run: |
+          OUTPUT=$(eas update \
+            --branch pr-${{ github.event.pull_request.number }} \
+            --message "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" \
+            --non-interactive \
+            --json 2>&1)
+          echo "$OUTPUT"
+          # Extract the update group ID from the JSON output
+          UPDATE_ID=$(echo "$OUTPUT" | jq -r '.[] | .updateGroupId' 2>/dev/null | head -1 || echo "")
+          echo "update_id=$UPDATE_ID" >> $GITHUB_OUTPUT
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Post preview link as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber  = context.payload.pull_request.number;
+            const updateId  = '${{ steps.eas-update.outputs.update_id }}';
+            const branch    = `pr-${prNumber}`;
+            const slug      = 'inner-compass-app'; // matches app.json slug
+
+            // Deep-link that opens Expo Go on device
+            const expoGoUrl = `exp.host/@yourusername/${slug}?channel-name=${branch}`;
+            const qrUrl     = `https://qr.expo.dev/eas-update?updateId=${updateId}&appScheme=inner-compass&host=u.expo.dev`;
+            const dashUrl   = `https://expo.dev/accounts/yourusername/projects/${slug}/updates`;
+
+            // Find and update existing comment, or create a new one
+            const marker = '<!-- expo-preview-comment -->';
+            const body = [
+              marker,
+              '## 📱 Expo Preview Ready',
+              '',
+              '| | |',
+              '|---|---|',
+              `| **Branch** | \`${branch}\` |`,
+              `| **Update ID** | \`${updateId || 'see dashboard'}\` |`,
+              `| **Commit** | \`${{ github.sha }}\`.slice(0,7) |`,
+              '',
+              '### Test on your device',
+              '',
+              '**Option 1 — QR code** (scan with Expo Go):',
+              '',
+              updateId
+                ? `![QR Code](${qrUrl})`
+                : '_QR code available after update ID is confirmed in the [Expo dashboard](' + dashUrl + ')_',
+              '',
+              '**Option 2 — Direct link:**',
+              `[Open in Expo Go](${expoGoUrl})`,
+              '',
+              '**Option 3 — Expo dashboard:**',
+              `[View update on expo.dev](${dashUrl})`,
+              '',
+              '> This preview updates automatically on every new push to this PR.',
+            ].join('\n');
+
+            // Look for an existing comment to update instead of spamming
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: prNumber,
+            });
+            const existing = comments.data.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }

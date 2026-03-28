@@ -1,0 +1,274 @@
+# ============================================================
+# Deploy — Inner Compass
+# Runs on every push to main.
+#
+# Strategy:
+#   - Always push an OTA update to the production channel (JS changes,
+#     no app store submission needed, instant delivery to users).
+#   - Only trigger a full EAS native build if native-affecting files
+#     changed: ios/, android/, app.json, package.json, eas.json.
+#   - Creates a GitHub Release tag on successful deploy.
+#   - Sends a Slack notification if SLACK_WEBHOOK_URL is set.
+#
+# Required secrets (GitHub → Settings → Secrets → Actions):
+#   EXPO_TOKEN          → expo.dev/accounts/[username]/settings/access-tokens
+#
+# Optional secrets:
+#   SLACK_WEBHOOK_URL   → Incoming Webhook URL from Slack app settings
+#
+# How to get EXPO_TOKEN:
+#   1. https://expo.dev/accounts/[your-username]/settings/access-tokens
+#   2. "Create Token" → name "GitHub Actions" → copy value
+#   3. GitHub repo → Settings → Secrets → Actions → New secret → EXPO_TOKEN
+# ============================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # ── Detect what changed ──────────────────────────────────────────────────────
+  changes:
+    name: Detect changed files
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.filter.outputs.native }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need parent commit for diff
+
+      - name: Detect native file changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            native:
+              - 'ios/**'
+              - 'android/**'
+              - 'app.json'
+              - 'package.json'
+              - 'eas.json'
+
+  # ── OTA Update (always runs) ─────────────────────────────────────────────────
+  ota-update:
+    name: OTA Update → production
+    runs-on: ubuntu-latest
+    needs: changes
+    outputs:
+      update_id: ${{ steps.push-update.outputs.update_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Login to Expo
+        run: eas login --token ${{ secrets.EXPO_TOKEN }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Push OTA update to production channel
+        id: push-update
+        run: |
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          OUTPUT=$(eas update \
+            --branch production \
+            --message "Deploy from main — ${SHORT_SHA}" \
+            --non-interactive \
+            --json 2>&1)
+          echo "$OUTPUT"
+          UPDATE_ID=$(echo "$OUTPUT" | jq -r '.[] | .updateGroupId' 2>/dev/null | head -1 || echo "")
+          echo "update_id=$UPDATE_ID" >> $GITHUB_OUTPUT
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+  # ── Native build (only when native files changed) ───────────────────────────
+  native-build:
+    name: EAS Build — iOS + Android
+    runs-on: ubuntu-latest
+    needs: [changes, ota-update]
+    if: needs.changes.outputs.native == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Login to Expo
+        run: eas login --token ${{ secrets.EXPO_TOKEN }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build iOS + Android (production profile)
+        run: |
+          eas build \
+            --platform all \
+            --profile production \
+            --non-interactive \
+            --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Log build queued notice
+        run: |
+          echo "✅ Native build queued on EAS."
+          echo "Track progress at: https://expo.dev/accounts/yourusername/projects/inner-compass-app/builds"
+
+  # ── GitHub Release ───────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: ota-update
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive release tag
+        id: tag
+        run: |
+          DATE=$(date -u +"%Y%m%d")
+          SHORT="${{ github.sha }}"
+          SHORT="${SHORT:0:7}"
+          echo "tag=release-${DATE}-${SHORT}" >> $GITHUB_OUTPUT
+          echo "name=Deploy ${DATE} (${SHORT})" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag       = '${{ steps.tag.outputs.tag }}';
+            const name      = '${{ steps.tag.outputs.name }}';
+            const updateId  = '${{ needs.ota-update.outputs.update_id }}';
+            const sha       = '${{ github.sha }}';
+            const nativeBlt = '${{ needs.changes.outputs.native }}' === 'true';
+
+            const body = [
+              `**Commit:** \`${sha}\``,
+              `**OTA Update ID:** \`${updateId || 'see Expo dashboard'}\``,
+              `**Native build queued:** ${nativeBlt ? '✅ Yes (native files changed)' : '⏭️ Skipped (JS-only change)'}`,
+              '',
+              '### What shipped',
+              '${{ github.event.head_commit.message }}'.split('\n')[0],
+              '',
+              '[View on Expo](https://expo.dev/accounts/yourusername/projects/inner-compass-app/updates)',
+            ].join('\n');
+
+            await github.rest.repos.createRelease({
+              owner:            context.repo.owner,
+              repo:             context.repo.repo,
+              tag_name:         tag,
+              name,
+              body,
+              draft:            false,
+              prerelease:       false,
+              target_commitish: sha,
+            });
+
+  # ── Slack notification (optional) ────────────────────────────────────────────
+  notify-slack:
+    name: Slack notification
+    runs-on: ubuntu-latest
+    needs: [ota-update, release]
+    # Only runs if the secret is set — won't fail if it's missing
+    if: |
+      always() &&
+      vars.SLACK_WEBHOOK_ENABLED == 'true' ||
+      secrets.SLACK_WEBHOOK_URL != ''
+
+    steps:
+      - name: Send Slack message
+        # Guard: skip gracefully if webhook URL is not set
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL not set — skipping notification."
+            exit 0
+          fi
+
+          SHORT="${{ github.sha }}"
+          SHORT="${SHORT:0:7}"
+          STATUS="${{ needs.ota-update.result }}"
+          EMOJI=$([ "$STATUS" = "success" ] && echo "✅" || echo "❌")
+          MSG=$(cat <<JSON
+          {
+            "text": "${EMOJI} *Inner Compass deployed* — \`${SHORT}\`",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "${EMOJI} *Inner Compass* — OTA update pushed to production\n*Commit:* \`${SHORT}\`\n*By:* ${{ github.actor }}\n*Message:* ${{ github.event.head_commit.message }}"
+                }
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": { "type": "plain_text", "text": "View on Expo" },
+                    "url": "https://expo.dev/accounts/yourusername/projects/inner-compass-app/updates"
+                  },
+                  {
+                    "type": "button",
+                    "text": { "type": "plain_text", "text": "View commit" },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+          )
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "$MSG" \
+            "$SLACK_WEBHOOK_URL"

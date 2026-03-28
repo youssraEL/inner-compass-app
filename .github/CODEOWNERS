@@ -1,0 +1,15 @@
+# CODEOWNERS — Inner Compass
+# Defines who is automatically requested for review on every PR.
+# Replace @your-github-username with the actual GitHub username(s).
+#
+# Syntax: <pattern> <owner> [<owner> ...]
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @your-github-username
+
+# CI/CD pipelines — require an extra review
+.github/workflows/ @your-github-username
+
+# Supabase schema — require careful review
+supabase/ @your-github-username
