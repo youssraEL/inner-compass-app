@@ -173,6 +173,123 @@ eas submit --platform all
 | PR opened/updated to `main` | Preview EAS Update created + QR code posted as PR comment |
 | Merge to `main` | OTA update pushed to production; native build triggered if native files changed |
 
+## Publishing to Google Play Store
+
+### Before you start (one-time setup)
+
+**1. Create a Google Play Developer account**
+
+Go to [play.google.com/console](https://play.google.com/console) and sign in with your Google account.
+- One-time **$25 registration fee**
+- Use the same Google account you use for development
+- Account verification takes **1–2 days** — do this early
+
+**2. Create a new app in Play Console**
+
+Once your account is approved:
+- Click **"Create app"**
+- App name: **Istiqama**
+- Default language: **English**
+- App or game: **App**
+- Free or paid: **Free**
+- Accept the declarations → **Create app**
+
+**3. Set up app signing**
+
+- Go to **Setup → App integrity → App signing**
+- Select **"Let Google manage my app signing key"** (recommended — Google keeps the key safe)
+- Download and save the **upload key certificate** shown — you'll need it to sign your `.aab` before upload
+
+---
+
+### Prepare the app for release
+
+**4. Update `app.json` with production values**
+
+```json
+{
+  "expo": {
+    "version": "1.0.0",
+    "android": {
+      "package": "com.youssrael.istiqama",
+      "versionCode": 1,
+      "permissions": []
+    }
+  }
+}
+```
+
+> `versionCode` must be incremented (1 → 2 → 3 …) for every new `.aab` you upload to Play Store. `eas.json` has `autoIncrement: true` so EAS handles this automatically.
+
+**5. Build the production Android binary**
+
+```bash
+eas build --platform android --profile production
+```
+
+- This produces an `.aab` (Android App Bundle) — **not** an `.apk`
+- EAS builds usually take **10–20 minutes**
+- When done, download the `.aab` from [expo.dev](https://expo.dev) → your project → Builds
+
+---
+
+### Submit to Play Store
+
+**6.** Go to **Play Console → your app → Production → Releases → Create new release**
+
+**7.** Upload the `.aab` file you downloaded from EAS
+
+**8.** Fill in **release notes** — what's new in this version (required for every release)
+
+**9.** Click **"Save"** then **"Review release"**
+
+**10.** Fix any warnings Play Console shows — common ones:
+- Missing screenshots
+- Short description too short
+- Privacy policy URL missing
+
+**11.** Click **"Start rollout to Production"** → **Confirm**
+
+---
+
+### Required store listing assets
+
+Prepare these before submitting — Play Console will block submission without them:
+
+| Asset | Spec |
+|---|---|
+| App icon | 512×512 PNG, no transparency, no rounded corners (Google applies them) |
+| Feature graphic | 1024×500 PNG (shown at top of store listing) |
+| Phone screenshots | Min 2, max 8 — at least 1080×1920 px |
+| Short description | Max **80 characters** |
+| Full description | Max **4000 characters** |
+| Privacy policy URL | Required — see section below |
+| Content rating | Complete the questionnaire inside Play Console |
+
+---
+
+### After first submission
+
+- First review usually takes **3–7 days**
+- You'll receive an email when approved or if changes are needed
+- Once live, future releases follow the same **build → upload → release** flow
+- **OTA updates via `eas update`** do NOT go through Play Store review — JS-only changes reach users instantly
+- Only submit a new `.aab` when **native code, new packages, or app permissions** change
+
+---
+
+### Privacy policy (required by Google)
+
+Google requires a privacy policy URL before your app can go live.
+
+1. A `privacy-policy.md` file is included in this repo
+2. Enable **GitHub Pages** on your repo:
+   - Repo → Settings → Pages → Source: `main` branch → Save
+3. Your policy URL will be: `https://youssrael.github.io/inner-compass-app/privacy-policy`
+4. Paste that URL into Play Console → **App content → Privacy policy**
+
+---
+
 ## GitHub secrets required
 
 **Repo → Settings → Secrets and variables → Actions → New repository secret**
@@ -182,7 +299,11 @@ eas submit --platform all
 | `EXPO_TOKEN` | expo.dev → account settings → access tokens → Create Token |
 | `SLACK_WEBHOOK_URL` | Slack app settings → Incoming Webhooks (optional — deploy notifications) |
 
-> `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `ANTHROPIC_API_KEY` are set per EAS build profile inside `eas.json` → `env`, or stored as EAS Secrets via `eas secret:create` for better security.
+> `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set in `eas.json` → `env` per build profile.
+> `ANTHROPIC_API_KEY` is stored as a **Supabase Edge Function secret** (never in the app bundle):
+> ```bash
+> supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+> ```
 
 ## Branch strategy
 

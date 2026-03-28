@@ -225,6 +225,7 @@ export default function HomeScreen() {
               placeholderTextColor={COLORS.textMuted}
               multiline
               numberOfLines={4}
+              maxLength={2000}
               textAlignVertical="top"
             />
             {saving && (

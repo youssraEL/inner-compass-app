@@ -273,6 +273,7 @@ function HabitSectionBlock({
             onChangeText={onNewNameChange}
             placeholder="Habit name *"
             placeholderTextColor={COLORS.textMuted}
+            maxLength={100}
             autoFocus
           />
           <TextInput
@@ -281,6 +282,7 @@ function HabitSectionBlock({
             onChangeText={onNewSubtitleChange}
             placeholder="Subtitle (optional)"
             placeholderTextColor={COLORS.textMuted}
+            maxLength={150}
           />
           <View style={styles.addFormActions}>
             <TouchableOpacity

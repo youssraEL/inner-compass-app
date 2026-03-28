@@ -170,6 +170,7 @@ export default function PrinciplesScreen() {
                   placeholder="Add a new principle..."
                   placeholderTextColor={COLORS.textMuted}
                   multiline
+                  maxLength={500}
                   returnKeyType="done"
                   onSubmitEditing={addPrinciple}
                 />
@@ -263,6 +264,7 @@ function PrincipleCard({
               onChangeText={onEditTextChange}
               multiline
               autoFocus
+              maxLength={500}
               placeholderTextColor={COLORS.textMuted}
             />
             <View style={styles.editActions}>

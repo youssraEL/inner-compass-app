@@ -31,7 +31,7 @@ CREATE POLICY "Users: update own" ON public.users
 CREATE TABLE IF NOT EXISTS public.principles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  text TEXT NOT NULL,
+  text TEXT NOT NULL CHECK (char_length(text) BETWEEN 1 AND 500),
   order_index INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -61,8 +61,8 @@ CREATE TYPE IF NOT EXISTS habit_category AS ENUM ('life', 'spiritual');
 CREATE TABLE IF NOT EXISTS public.habits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  subtitle TEXT,
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 100),
+  subtitle TEXT CHECK (subtitle IS NULL OR char_length(subtitle) <= 150),
   category habit_category NOT NULL,
   is_preset BOOLEAN NOT NULL DEFAULT FALSE,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS public.daily_checkins (
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   date DATE NOT NULL,
   habits_completed JSONB NOT NULL DEFAULT '{}',
-  reflection TEXT,
+  reflection TEXT CHECK (reflection IS NULL OR char_length(reflection) <= 2000),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, date)
 );

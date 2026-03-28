@@ -26,7 +26,9 @@ type ChatRouteParams = {
   };
 };
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
+// Claude API calls go through a Supabase Edge Function (supabase/functions/chat/).
+// The ANTHROPIC_API_KEY is stored as an EAS/Supabase secret — never in the app bundle.
+const CHAT_FUNCTION_URL = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/chat`;
 
 export default function ChatScreen() {
   const navigation = useNavigation<any>();
@@ -143,26 +145,26 @@ export default function ChatScreen() {
       const systemPrompt = getSystemPrompt(context, extra);
       const allMessages = [...messages, userMessage];
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      // Get the current session JWT to authenticate against the edge function
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const response = await fetch(CHAT_FUNCTION_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'messages-2023-12-15',
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          system: systemPrompt,
-          stream: true,
+          systemPrompt,
           messages: allMessages.map(m => ({ role: m.role, content: m.content })),
         }),
       });
 
       if (!response.ok) {
-        const err = await response.text();
-        throw new Error(err);
+        // Do not surface raw server errors — they may contain internal details
+        throw new Error(`Request failed (${response.status})`);
       }
 
       // Append empty assistant message
@@ -203,7 +205,7 @@ export default function ChatScreen() {
       }
     } catch (err: any) {
       if (!abortRef.current) {
-        Alert.alert('Error', 'Failed to get response. Check your API key and connection.');
+        Alert.alert('Error', 'Could not reach the AI service. Please check your connection and try again.');
         // Remove the empty assistant message if streaming failed before any content
         setMessages(prev => {
           const last = prev[prev.length - 1];

@@ -81,7 +81,9 @@ jobs:
         run: npm ci
 
       - name: ESLint
-        run: npx eslint . --ext .ts,.tsx --max-warnings 0
+        # ESLint v9 uses flat config (eslint.config.js); --ext is not valid in v9.
+        # File patterns are declared inside eslint.config.js instead.
+        run: npx eslint . --max-warnings 0
 
   test:
     name: Tests
@@ -109,7 +111,8 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: npm test -- --passWithNoTests
+        # passWithNoTests is configured in package.json jest config
+        run: npm test
 
   expo-config:
     name: Expo Config
@@ -137,7 +140,9 @@ jobs:
         run: npm ci
 
       - name: Validate Expo config
-        run: npx expo-env-info
+        # expo config reads and validates app.json + resolves the full Expo config;
+        # a non-zero exit means the config is broken or Expo cannot load the project.
+        run: npx expo config --type public > /dev/null
 
   # Post a PR comment summarising what failed (only on PRs)
   notify-failure:
