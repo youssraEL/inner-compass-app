@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Inner Compass",
+    "slug": "inner-compass-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F8F7F4"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.innercompass.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F8F7F4",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "package": "com.innercompass.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "scheme": "inner-compass"
+  }
+}
