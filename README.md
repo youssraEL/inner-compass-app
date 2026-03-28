@@ -17,9 +17,9 @@ Inner Compass helps you build a strong, self-validated identity by defining the 
 | Mobile framework | React Native + Expo (managed workflow) |
 | Auth | Supabase Auth + Google OAuth |
 | Database | Supabase (PostgreSQL + Row Level Security) |
-| AI | Claude API (`claude-sonnet-4-20250514`) |
+| AI | Claude API (`claude-sonnet-4-20250514`) via Supabase Edge Function |
 | Navigation | React Navigation (bottom tabs + stack) |
-| Local storage | AsyncStorage |
+| Secure storage | expo-secure-store (device keychain / Keystore) |
 | CI/CD | GitHub Actions + EAS Build + EAS Update |
 
 ## Project structure
@@ -30,15 +30,18 @@ inner-compass-app/
 ├── index.js                      # Expo entry point
 ├── app.json                      # Expo config (name, scheme, icons)
 ├── babel.config.js               # Babel config (includes Reanimated plugin)
+├── tsconfig.json                 # TypeScript config (extends expo/tsconfig.base)
+├── eslint.config.js              # ESLint v9 flat config (extends eslint-config-expo)
 ├── eas.json                      # EAS build profiles (dev / preview / production)
 ├── .env.example                  # Environment variable template
+├── privacy-policy.md             # Privacy policy (host on GitHub Pages for Play Store)
 │
 ├── src/
 │   ├── types/
 │   │   └── index.ts              # Shared TypeScript types (User, Habit, Principle, etc.)
 │   │
 │   ├── lib/
-│   │   ├── supabase.ts           # Supabase client with AsyncStorage session
+│   │   ├── supabase.ts           # Supabase client with expo-secure-store session
 │   │   ├── AuthContext.tsx       # Auth provider — session, user profile, first-login
 │   │   ├── constants.ts          # Colors, default principles, default habits
 │   │   └── systemPrompts.ts      # Claude system prompts per chat context
@@ -48,28 +51,31 @@ inner-compass-app/
 │   │
 │   └── screens/
 │       ├── auth/
-│       │   └── AuthScreen.tsx    # Google OAuth sign-in
+│       │   └── AuthScreen.tsx        # Google OAuth sign-in
 │       ├── onboarding/
 │       │   └── OnboardingScreen.tsx  # 4-step setup: welcome → principles → habits → done
 │       ├── home/
-│       │   └── HomeScreen.tsx    # Today tab: habit checkboxes, reflection, AI entry points
+│       │   └── HomeScreen.tsx        # Today tab: habit checkboxes, reflection, AI entry points
 │       ├── chat/
-│       │   └── ChatScreen.tsx    # Streaming Claude chat (5 context modes)
+│       │   └── ChatScreen.tsx        # Streaming Claude chat via edge function (5 context modes)
 │       ├── principles/
 │       │   └── PrinciplesScreen.tsx  # Full CRUD + reorder for personal principles
 │       ├── habits/
-│       │   └── HabitsScreen.tsx  # Toggle, edit, add custom habits by category
+│       │   └── HabitsScreen.tsx      # Toggle, edit, add custom habits by category
 │       └── history/
-│           └── HistoryScreen.tsx # 5-week dot grid, streaks, last-7-days breakdown
+│           └── HistoryScreen.tsx     # 5-week dot grid, streaks, last-7-days breakdown
 │
 ├── supabase/
-│   └── schema.sql                # Full schema + RLS policies (run once in Supabase SQL editor)
+│   ├── schema.sql                # Full schema + RLS policies (run once in Supabase SQL editor)
+│   └── functions/
+│       └── chat/
+│           └── index.ts          # Edge function: secure Claude API proxy (key never in app)
 │
 └── .github/
     ├── CODEOWNERS                # Auto-assigns reviewers on every PR
     ├── pull_request_template.md  # PR checklist (device tested, RLS, screenshots)
     └── workflows/
-        ├── ci.yml                # Lint + typecheck + test on every push and PR
+        ├── ci.yml                # TypeScript + ESLint + Jest on every push and PR
         ├── preview.yml           # EAS Update preview + QR code comment on PRs to main
         └── deploy.yml            # OTA update → production + optional native build on push to main
 ```
@@ -81,6 +87,7 @@ Before running this project you need:
 - **Node.js 18** or higher — [nodejs.org](https://nodejs.org)
 - **Expo CLI** — `npm install -g expo-cli`
 - **EAS CLI** — `npm install -g eas-cli`
+- **Supabase CLI** — `npm install -g supabase` (for deploying the edge function)
 - A **Supabase** account and project — [supabase.com](https://supabase.com)
 - An **Anthropic API key** — [console.anthropic.com](https://console.anthropic.com)
 - A **Google Cloud project** with OAuth 2.0 credentials — [console.cloud.google.com](https://console.cloud.google.com)
@@ -92,7 +99,6 @@ Create a `.env` file in the project root (copy from `.env.example`):
 ```
 EXPO_PUBLIC_SUPABASE_URL=your_supabase_project_url
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-EXPO_PUBLIC_ANTHROPIC_API_KEY=your_anthropic_api_key
 EXPO_PUBLIC_GOOGLE_CLIENT_ID=your_google_oauth_client_id
 ```
 
@@ -102,21 +108,33 @@ Where to get each value:
 |---|---|
 | `EXPO_PUBLIC_SUPABASE_URL` | Supabase → your project → Settings → API → Project URL |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Supabase → your project → Settings → API → anon public key |
-| `EXPO_PUBLIC_ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys → Create key |
 | `EXPO_PUBLIC_GOOGLE_CLIENT_ID` | Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID |
 
-> **Note:** The `EXPO_PUBLIC_` prefix makes these variables available in the Expo client bundle. For server-side only usage (e.g. a backend proxy), omit the prefix.
+> **`ANTHROPIC_API_KEY` is NOT a client-side variable.** It is stored as a Supabase Edge Function secret and never bundled into the app. See [Supabase setup](#supabase-setup) below.
 
 ## Supabase setup
 
 1. Create a new Supabase project at [supabase.com](https://supabase.com)
+
 2. Open the **SQL Editor** and run the full contents of `supabase/schema.sql`
    — this creates the `users`, `principles`, `habits`, and `daily_checkins` tables with RLS enabled
+
 3. Enable Google as an OAuth provider:
-   **Authentication → Providers → Google** → toggle on
-4. Paste your Google OAuth **Client ID** and **Client Secret** (from Google Cloud Console)
-5. Copy the **Supabase callback URL** shown in that panel and add it to Google Cloud Console:
+   **Authentication → Providers → Google** → toggle on — paste your Google OAuth **Client ID** and **Client Secret**
+
+4. Copy the **Supabase callback URL** shown in that panel and add it in Google Cloud Console:
    **APIs & Services → Credentials → your OAuth client → Authorised redirect URIs**
+
+5. Deploy the Claude API edge function and set the API key secret:
+
+   ```bash
+   supabase login
+   supabase link --project-ref your-project-ref
+   supabase functions deploy chat
+   supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+   ```
+
+   The `ANTHROPIC_API_KEY` lives inside the Deno runtime of the edge function — it is **never** shipped in the app bundle.
 
 ## How to run locally
 
@@ -169,9 +187,9 @@ eas submit --platform all
 
 | Event | What happens |
 |---|---|
-| Push to any branch | TypeScript check + ESLint + tests run |
+| Push to any branch | TypeScript check + ESLint + Jest tests run |
 | PR opened/updated to `main` | Preview EAS Update created + QR code posted as PR comment |
-| Merge to `main` | OTA update pushed to production; native build triggered if native files changed |
+| Merge to `main` | OTA update pushed to production; native build triggered only if native files changed |
 
 ## Publishing to Google Play Store
 
@@ -181,24 +199,17 @@ eas submit --platform all
 
 Go to [play.google.com/console](https://play.google.com/console) and sign in with your Google account.
 - One-time **$25 registration fee**
-- Use the same Google account you use for development
 - Account verification takes **1–2 days** — do this early
 
 **2. Create a new app in Play Console**
 
-Once your account is approved:
-- Click **"Create app"**
-- App name: **Istiqama**
-- Default language: **English**
-- App or game: **App**
-- Free or paid: **Free**
-- Accept the declarations → **Create app**
+- Click **"Create app"** → App name: **Istiqama** → Language: English → App → Free → Accept declarations → **Create app**
 
 **3. Set up app signing**
 
-- Go to **Setup → App integrity → App signing**
-- Select **"Let Google manage my app signing key"** (recommended — Google keeps the key safe)
-- Download and save the **upload key certificate** shown — you'll need it to sign your `.aab` before upload
+- **Setup → App integrity → App signing**
+- Select **"Let Google manage my app signing key"** (recommended)
+- Download and save the **upload key certificate**
 
 ---
 
@@ -219,7 +230,7 @@ Once your account is approved:
 }
 ```
 
-> `versionCode` must be incremented (1 → 2 → 3 …) for every new `.aab` you upload to Play Store. `eas.json` has `autoIncrement: true` so EAS handles this automatically.
+> `versionCode` must increment for every new `.aab` upload. `eas.json` has `autoIncrement: true` so EAS handles this automatically.
 
 **5. Build the production Android binary**
 
@@ -227,66 +238,57 @@ Once your account is approved:
 eas build --platform android --profile production
 ```
 
-- This produces an `.aab` (Android App Bundle) — **not** an `.apk`
-- EAS builds usually take **10–20 minutes**
-- When done, download the `.aab` from [expo.dev](https://expo.dev) → your project → Builds
+- Produces an `.aab` (Android App Bundle) — **not** an `.apk`
+- Builds take ~10–20 minutes on EAS servers
+- Download the `.aab` from [expo.dev](https://expo.dev) → your project → Builds
 
 ---
 
 ### Submit to Play Store
 
-**6.** Go to **Play Console → your app → Production → Releases → Create new release**
+**6.** Play Console → your app → **Production → Releases → Create new release**
 
-**7.** Upload the `.aab` file you downloaded from EAS
+**7.** Upload the `.aab`
 
-**8.** Fill in **release notes** — what's new in this version (required for every release)
+**8.** Fill in release notes (required)
 
-**9.** Click **"Save"** then **"Review release"**
+**9.** Click **Save** → **Review release**
 
-**10.** Fix any warnings Play Console shows — common ones:
-- Missing screenshots
-- Short description too short
-- Privacy policy URL missing
+**10.** Fix any Play Console warnings (missing screenshots, privacy policy URL, etc.)
 
-**11.** Click **"Start rollout to Production"** → **Confirm**
+**11.** Click **Start rollout to Production** → **Confirm**
 
 ---
 
 ### Required store listing assets
 
-Prepare these before submitting — Play Console will block submission without them:
-
 | Asset | Spec |
 |---|---|
-| App icon | 512×512 PNG, no transparency, no rounded corners (Google applies them) |
-| Feature graphic | 1024×500 PNG (shown at top of store listing) |
+| App icon | 512×512 PNG, no transparency |
+| Feature graphic | 1024×500 PNG |
 | Phone screenshots | Min 2, max 8 — at least 1080×1920 px |
-| Short description | Max **80 characters** |
-| Full description | Max **4000 characters** |
-| Privacy policy URL | Required — see section below |
-| Content rating | Complete the questionnaire inside Play Console |
+| Short description | Max 80 characters |
+| Full description | Max 4000 characters |
+| Privacy policy URL | Required — see below |
+| Content rating | Complete questionnaire in Play Console |
 
 ---
 
 ### After first submission
 
-- First review usually takes **3–7 days**
-- You'll receive an email when approved or if changes are needed
-- Once live, future releases follow the same **build → upload → release** flow
-- **OTA updates via `eas update`** do NOT go through Play Store review — JS-only changes reach users instantly
-- Only submit a new `.aab` when **native code, new packages, or app permissions** change
+- First review takes **3–7 days**
+- Future updates: same build → upload → release flow
+- **OTA updates via `eas update`** skip Play Store review entirely (JS-only changes)
+- Submit a new `.aab` only when native code, packages, or permissions change
 
 ---
 
 ### Privacy policy (required by Google)
 
-Google requires a privacy policy URL before your app can go live.
-
-1. A `privacy-policy.md` file is included in this repo
-2. Enable **GitHub Pages** on your repo:
-   - Repo → Settings → Pages → Source: `main` branch → Save
-3. Your policy URL will be: `https://youssrael.github.io/inner-compass-app/privacy-policy`
-4. Paste that URL into Play Console → **App content → Privacy policy**
+1. `privacy-policy.md` is included in this repo
+2. Enable **GitHub Pages**: repo → Settings → Pages → Source: `main` → Save
+3. Your policy URL: `https://youssrael.github.io/inner-compass-app/privacy-policy`
+4. Paste into Play Console → **App content → Privacy policy**
 
 ---
 
@@ -299,8 +301,9 @@ Google requires a privacy policy URL before your app can go live.
 | `EXPO_TOKEN` | expo.dev → account settings → access tokens → Create Token |
 | `SLACK_WEBHOOK_URL` | Slack app settings → Incoming Webhooks (optional — deploy notifications) |
 
-> `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set in `eas.json` → `env` per build profile.
-> `ANTHROPIC_API_KEY` is stored as a **Supabase Edge Function secret** (never in the app bundle):
+> **`SUPABASE_URL` and `SUPABASE_ANON_KEY`** are set in `eas.json` → `env` per build profile (not GitHub secrets).
+>
+> **`ANTHROPIC_API_KEY`** is a Supabase Edge Function secret — never a GitHub or EAS secret, never in `.env`:
 > ```bash
 > supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 > ```
@@ -315,10 +318,9 @@ Google requires a privacy policy URL before your app can go live.
 
 ### Enforcing branch protection on `main`
 
-Go to: **GitHub repo → Settings → Branches → Add rule → Branch name pattern: `main`**
+**GitHub repo → Settings → Branches → Add rule → Branch name pattern: `main`**
 
-- ✅ Require status checks to pass before merging
-  - Add: `ci / typecheck`, `ci / lint`, `ci / test`
+- ✅ Require status checks to pass before merging — add: `ci / typecheck`, `ci / lint`, `ci / test`
 - ✅ Require at least 1 approving review
 - ✅ Do not allow bypassing the above settings
 
@@ -329,7 +331,7 @@ The Chat screen adapts its Claude system prompt based on the entry point:
 | Context | Entry point | Claude's role |
 |---|---|---|
 | `evening_checkin` | Home → "Evening check-in with Claude" | Warm growth coach, one question at a time about principles alignment |
-| `struggling` | Home → "I'm struggling right now" | Grounding, compassionate — identifies trigger and gives one immediate action |
+| `struggling` | Home → "I'm struggling right now" | Grounding, compassionate — identifies trigger, gives one immediate action |
 | `principles` | Principles → "Help me define a new principle" | Draws out principles through questions, never suggests directly |
 | `weekly_review` | History → "Review my week with Claude" | Honest pattern analysis + one focus area for next week |
 | `habits_help` | Habits tab | Helps identify which 1–2 habits matter most right now |
